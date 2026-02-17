@@ -16,6 +16,7 @@ copyright:          (c) SCE Team, 2026
 category:           Statistics, Charts
 build-type:         Simple
 extra-doc-files:    CHANGELOG_V2.0.2_FINAL.md
+                    README.md
 
 -- -----------------------------------------------------------------------
 -- Common settings shared by library, executable, and test suite
@@ -33,6 +34,7 @@ common common-options
   default-extensions:
       OverloadedStrings
       StrictData
+      LambdaCase
 
 -- -----------------------------------------------------------------------
 -- Library
@@ -48,6 +50,11 @@ library
       SCE.Core.DataModel
       SCE.Core.Statistics
       SCE.Core.Logger
+      -- Ingestion pipeline (Phase 1)
+      SCE.Ingestion.Parser
+      SCE.Ingestion.Schema
+      SCE.Ingestion.MissingData
+      SCE.Ingestion.Coercion
       -- Validation
       SCE.Validation.LiquidTypes
       SCE.Validation.Validator
@@ -113,12 +120,16 @@ test-suite sce-tests
   main-is:          Spec.hs
   other-modules:
       Phase0.ErrorSpec
+      Phase1.IngestionSpec
   build-depends:
       base       >= 4.14 && < 5
     , sce
     , hspec      >= 2.9  && < 2.12
     , QuickCheck >= 2.14 && < 2.16
     , text       >= 1.2  && < 2.2
+    , bytestring
+    , vector
+    , containers
   ghc-options:
       -threaded
       -rtsopts
