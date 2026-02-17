@@ -50,6 +50,7 @@ library
       SCE.Core.DataModel
       SCE.Core.Statistics
       SCE.Core.Logger
+      SCE.Core.Correlation
       -- Ingestion pipeline (Phase 1)
       SCE.Ingestion.Parser
       SCE.Ingestion.Schema
