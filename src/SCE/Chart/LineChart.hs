@@ -40,7 +40,7 @@ data LinePoint = LinePoint
 data SeriesData = SeriesData
   { seriesName   :: Text
   , seriesPoints :: Vector LinePoint
-  , seriesSymbol :: Char  -- ^ Symbol to use for this series (●, ○, ■, etc.)
+  , seriesSymbol :: Char  -- ^ Symbol to use for this series (*, +, o, x, etc. -- ASCII only)
   }
   deriving stock (Show, Eq)
 
@@ -109,57 +109,84 @@ renderLineChart points minValue maxValue config =
       -- Add Y-axis labels and values
       valueLabels = generateValueLabels height minValue maxValue
       
-  in zipWith (\row valLabel -> valLabel <> " │ " <> row) grid valueLabels
+  in zipWith (\row valLabel -> valLabel <> " | " <> row) grid valueLabels
 
--- | Build ASCII grid with line
+-- | Build ASCII grid.
+-- Connects adjacent data points using '-' (horizontal), '|' (vertical),
+-- '/' or '+' (diagonal). 'X' marks are stamped last so they always
+-- sit on top of connecting lines.
+-- All characters are single-byte ASCII so T.splitAt indexing is safe.
 buildGrid :: Int -> Int -> [(Int, Int)] -> [Text]
 buildGrid height width coords =
-  let emptyRow = T.replicate width " "
-      rows = replicate height emptyRow
-      
-      -- Plot points and connect them
-      rowsWithPoints = case coords of
-        [] -> rows
-        [_] -> rows  -- Single point, no lines to draw
-        _ -> foldl plotSegment rows (zip coords (drop 1 coords))
-      
-  in map (<> " │") rowsWithPoints
+  let emptyRow     = T.replicate width " "
+      rows         = replicate height emptyRow
+      -- Step 1: draw connecting lines between consecutive points
+      rowsWithLines = case coords of
+        []      -> rows
+        [_]     -> rows
+        (c:cs)  -> foldl drawSegment rows (zip (c:cs) cs)
+      -- Step 2: stamp 'X' on top at each actual data point
+      rowsWithX    = foldl (\rs (x,y) -> setCell rs y x 'X') rowsWithLines coords
+  in map (<> " |") rowsWithX
   where
-    plotSegment rows' ((x1, y1), (x2, y2)) =
-      let points = bresenhamLine x1 y1 x2 y2
-          rows'' = foldl (\rs (x, y) -> 
-                    if y >= 0 && y < height && x >= 0 && x < width
-                    then updateRow rs y x
-                    else rs
-                  ) rows' points
-      in rows''
-    
-    updateRow rows' y x =
-      let (before, row:after) = splitAt y rows'
-          newRow = replaceChar row x '●'
-      in before ++ [newRow] ++ after
-    
-    replaceChar txt idx ch =
-      let (before, after) = T.splitAt idx txt
-          rest = T.drop 1 after  -- Skip the character at idx
-      in before <> T.singleton ch <> rest
+    -- Draw a segment from (x1,y1) to (x2,y2) using directional ASCII chars
+    drawSegment rows' ((x1,y1),(x2,y2)) =
+      let pixels = segmentPixels x1 y1 x2 y2
+      in foldl (\rs (x,y,ch) ->
+           if y >= 0 && y < height && x >= 0 && x < width
+           then setCell rs y x ch
+           else rs
+         ) rows' pixels
 
--- | Bresenham's line algorithm for connecting points
-bresenhamLine :: Int -> Int -> Int -> Int -> [(Int, Int)]
-bresenhamLine x0 y0 x1 y1 =
-  let dx = abs (x1 - x0)
-      dy = abs (y1 - y0)
-      sx = if x0 < x1 then 1 else -1
-      sy = if y0 < y1 then 1 else -1
-      
-      go x y err points
-        | x == x1 && y == y1 = reverse ((x, y) : points)
-        | otherwise =
-            let e2 = 2 * err
-                (x', err1) = if e2 > -dy then (x + sx, err - dy) else (x, err)
-                (y', err2) = if e2 < dx then (y + sy, err1 + dx) else (y, err1)
-            in go x' y' err2 ((x, y) : points)
-  in go x0 y0 (dx - dy) []
+    -- Choose the right character for each pixel based on slope direction
+    segmentPixels x1 y1 x2 y2 =
+      let dx  = x2 - x1
+          dy  = y2 - y1   -- positive = downward in grid (lower value)
+          -- Pick connector character based on dominant direction
+          ch  | dy == 0           = '-'   -- purely horizontal
+              | dx == 0           = '|'   -- purely vertical
+              | (dx > 0) == (dy > 0) = '+'  -- going down-right or up-left
+              | otherwise         = '/'   -- going up-right or down-left
+          -- Bresenham to get the pixel path
+          pixels = bresenham x1 y1 x2 y2
+          -- Tag each pixel with the appropriate character
+          -- Endpoints will be overwritten by 'X' anyway
+      in map (\(x,y) -> (x, y, dirChar x y x1 y1 x2 y2 dx dy)) pixels
+
+    -- Per-pixel character: horizontal step -> '-', vertical step -> '|', diagonal -> '/' or '\'
+    dirChar x y x1 y1 x2 y2 dx dy
+      | dx == 0   = '|'
+      | dy == 0   = '-'
+      | abs dx >= abs dy =
+          -- shallow slope — use '-' for most pixels, '/' or '+' at transitions
+          let rising = (dx > 0) /= (dy > 0)
+          in if rising then '/' else '+'
+      | otherwise =
+          let rising = (dx > 0) /= (dy > 0)
+          in if rising then '/' else '+'
+
+    -- Bresenham pixel enumeration (no character assignment)
+    bresenham x0 y0 x1' y1' =
+      let adx = abs (x1' - x0)
+          ady = abs (y1' - y0)
+          sx  = if x0 < x1' then 1 else -1
+          sy  = if y0 < y1' then 1 else -1
+          go x y err acc
+            | x == x1' && y == y1' = reverse ((x,y):acc)
+            | otherwise =
+                let e2         = 2 * err
+                    (x', err1) = if e2 > -ady then (x+sx, err-ady) else (x, err)
+                    (y', err2) = if e2 <  adx then (y+sy, err1+adx) else (y, err1)
+                in go x' y' err2 ((x,y):acc)
+      in go x0 y0 (adx - ady) []
+
+    setCell rows' y x ch =
+      case splitAt y rows' of
+        (before, row : after) ->
+          let (pre, rest) = T.splitAt x row
+              newRow      = pre <> T.singleton ch <> T.drop 1 rest
+          in before ++ [newRow] ++ after
+        _ -> rows'
 
 -- | Generate value labels for Y-axis
 generateValueLabels :: Int -> Double -> Double -> [Text]
@@ -191,29 +218,51 @@ generateLineHeader chartData =
      , ""
      ]
 
--- | Generate chart footer with X-axis
+-- | Generate chart footer with X-axis.
+-- Renders every label at the same x-column used to plot its data point.
 generateLineFooter :: LineChartData -> Double -> Double -> [Text]
 generateLineFooter chartData minValue maxValue =
-  let points = linePoints chartData
-      firstLabel = case V.uncons points of
-                     Just (p, _) -> pointLabel p
-                     Nothing -> "Start"
-      lastLabel = if V.null points 
-                  then "End"
-                  else pointLabel (V.last points)
-      xLabel = case lineXLabel chartData of
-                 Just lbl -> lbl
-                 Nothing  -> ""
-      
+  let points     = linePoints chartData
+      pointCount = V.length points
+      yAxisWidth = 14   -- matches "  labelWidth + 3" used in renderLineChart
+      chartW     = chartWidth (lineConfig chartData) - yAxisWidth - 10
+      xLabel     = case lineXLabel chartData of
+                     Just lbl -> lbl
+                     Nothing  -> ""
       minValText = T.pack $ printf "%.2f" minValue
       maxValText = T.pack $ printf "%.2f" maxValue
-      
+
+      -- Build an axis row of spaces, then stamp each label at its x position
+      axisRow    = buildXAxisRow pointCount chartW (V.toList points)
+
   in [ ""
-     , "             " <> firstLabel <> T.replicate 20 " " <> "..." <> T.replicate 20 " " <> lastLabel
-     , if not (T.null xLabel) then "             " <> xLabel else ""
+     , T.replicate yAxisWidth " " <> axisRow
+     , if not (T.null xLabel) then T.replicate yAxisWidth " " <> xLabel else ""
      , ""
      , "Value range: " <> minValText <> " to " <> maxValText
      ]
+
+-- | Build the X-axis label row by placing each label at its grid x-position.
+buildXAxisRow :: Int -> Int -> [LinePoint] -> Text
+buildXAxisRow pointCount chartW points =
+  let row0  = T.replicate (chartW + 2) " "
+      pairs = zip [0..] points
+  in foldl (placeLabel pointCount chartW) row0 pairs
+
+placeLabel :: Int -> Int -> Text -> (Int, LinePoint) -> Text
+placeLabel pointCount chartW row (idx, pt) =
+  let xPos  = if pointCount <= 1
+                then 0
+                else round (fromIntegral idx / fromIntegral (pointCount - 1)
+                             * fromIntegral (chartW - 1) :: Double)
+      lbl   = pointLabel pt
+      lblW  = T.length lbl
+      -- Centre label under the point; clamp so it doesn't overflow
+      start = max 0 (min (T.length row - lblW) (xPos - lblW `div` 2))
+      (pre, rest) = T.splitAt start row
+      -- Overwrite lblW characters
+      newRow = pre <> lbl <> T.drop lblW rest
+  in newRow
 
 -- | Generate a multi-series line chart
 generateMultiSeriesLineChart :: Vector SeriesData -> ChartConfig -> Maybe Text -> SCEResult [Text]
@@ -285,21 +334,23 @@ renderMultiSeriesChart series minValue maxValue config =
       
       valueLabels = generateValueLabels height minValue maxValue
       
-  in zipWith (\row valLabel -> valLabel <> " │ " <> row <> " │") finalRows valueLabels
+  in zipWith (\row valLabel -> valLabel <> " | " <> row <> " |") finalRows valueLabels
   where
     plotSeriesOnGrid rows' coords symbol =
       foldl (\rs (x, y) ->
         if y >= 0 && y < length rs && x >= 0 && x < chartWidth config - 22
-        then updateRowWithSymbol rs y x symbol
+        then setCell rs y x symbol
         else rs
       ) rows' coords
-    
-    updateRowWithSymbol rows' y x symbol =
-      let (before, row:after) = splitAt y rows'
-          (rowBefore, rowAfter) = T.splitAt x row
-          rowRest = T.drop 1 rowAfter  -- Skip the character at x
-          newRow = rowBefore <> T.singleton symbol <> rowRest
-      in before ++ [newRow] ++ after
+
+    -- Safe cell update: symbols must be single-byte ASCII
+    setCell rows' y x ch =
+      case splitAt y rows' of
+        (before, row : after) ->
+          let (pre, rest) = T.splitAt x row
+              newRow      = pre <> T.singleton ch <> T.drop 1 rest
+          in before ++ [newRow] ++ after
+        _ -> rows'
 
 generateLegend :: Vector SeriesData -> [Text]
 generateLegend series =
