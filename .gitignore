@@ -1,0 +1,19 @@
+# Stack & Cabal build folders
+.stack-work/
+dist/
+dist-newstyle/
+
+# GHC intermediate files
+*.o
+*.hi
+*.dyn_o
+*.dyn_hi
+*.hpc/
+
+# Editor / OS files
+*.log
+*.DS_Store
+*.swp
+.vscode/
+.idea/
+

@@ -1,0 +1,10 @@
+Date,Region,Category,Revenue,Units,ProfitMargin
+2024-01,North,A,120,30,0.25
+2024-01,South,A,100,25,0.2
+2024-01,East,A,90,20,0.18
+2024-02,North,B,150,35,0.28
+2024-02,South,B,110,27,0.22
+2024-02,East,B,80,18,0.15
+2024-03,North,C,200,40,0.32
+2024-03,South,C,140,33,0.26
+2024-03,East,C,95,22,0.19
