@@ -7,13 +7,9 @@ Module      : SCE.Chart.LineChart
 Description : Line chart generation for time-series and ordered data
 Copyright   : (c) SCE Team, 2026
 License     : BSD-3-Clause
-
-Generates ASCII line charts that preserve temporal ordering and show trends.
-Supports both single-series and multi-series line charts.
 -}
 module SCE.Chart.LineChart
-  ( -- * Line Chart Generation
-    generateLineChart
+  ( generateLineChart
   , generateMultiSeriesLineChart
   , LineChartData(..)
   , LinePoint(..)
@@ -27,24 +23,19 @@ import qualified Data.Text as T
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Text.Printf (printf)
-import Data.List (intercalate)
 
--- | Single point in a line chart
+
 data LinePoint = LinePoint
-  { pointLabel :: Text    -- ^ X-axis label (time/category)
-  , pointValue :: Double  -- ^ Y-axis value
-  }
-  deriving stock (Show, Eq)
+  { pointLabel :: Text
+  , pointValue :: Double
+  } deriving stock (Show, Eq)
 
--- | Data for a single series
 data SeriesData = SeriesData
   { seriesName   :: Text
   , seriesPoints :: Vector LinePoint
-  , seriesSymbol :: Char  -- ^ Symbol to use for this series (*, +, o, x, etc. -- ASCII only)
-  }
-  deriving stock (Show, Eq)
+  , seriesSymbol :: Char
+  } deriving stock (Show, Eq)
 
--- | Complete line chart data
 data LineChartData = LineChartData
   { linePoints :: Vector LinePoint
   , lineConfig :: ChartConfig
@@ -53,83 +44,58 @@ data LineChartData = LineChartData
   , lineTitle  :: Maybe Text
   , lineYLabel :: Maybe Text
   , lineXLabel :: Maybe Text
-  }
-  deriving stock (Show)
+  } deriving stock (Show)
 
--- | Generate a single-series line chart
 generateLineChart :: LineChartData -> SCEResult [Text]
 generateLineChart chartData = do
-  -- Validate point count (need at least 2 points for a line)
   let pointCount = V.length (linePoints chartData)
   if pointCount < 2
-    then Left (mkError E2002 ("Need at least " <> T.pack (show 2) <> " data points, got " <> T.pack (show pointCount)) ["Collect more data before running this operation."] Error)
+    then Left (mkError E2002
+                ("Need at least 2 data points, got " <> T.pack (show pointCount))
+                ["Collect more data before running this operation."] Error)
     else do
       let points = linePoints chartData
-      let config = lineConfig chartData
-      
-      -- Calculate value range
-      let values = V.map pointValue points
-      let minValue = V.minimum values
-      let maxValue = V.maximum values
+          config = lineConfig chartData
+          values = V.map pointValue points
+
+      -- Safe: pointCount >= 2, so values is non-empty.
+      (minValue, maxValue) <- safeMinMax "line chart values" values
       let range = maxValue - minValue
-      
-      -- Validate range
+
       if range <= 0
         then Left (mkError E2001 "All values are identical - cannot create line chart" [] Error)
         else do
-          -- Generate the chart
           let header = generateLineHeader chartData
-          let chart = renderLineChart points minValue maxValue config
-          let footer = generateLineFooter chartData minValue maxValue
-          
+              chart  = renderLineChart points minValue maxValue config
+              footer = generateLineFooter chartData minValue maxValue
           return $ header ++ chart ++ footer
 
--- | Render the line chart visualization
 renderLineChart :: Vector LinePoint -> Double -> Double -> ChartConfig -> [Text]
 renderLineChart points minValue maxValue config =
-  let height = 12  -- Fixed height for ASCII chart
-      width = chartWidth config
-      labelWidth = 12
-      chartWidth' = width - labelWidth - 10  -- Reserve space for labels and axis
-      
-      -- Normalize values to chart coordinates (0 to height-1)
-      range = maxValue - minValue
+  let height      = 12
+      width       = chartWidth config
+      labelWidth  = 12
+      chartWidth' = width - labelWidth - 10
+      range       = maxValue - minValue
       normalizeY val = height - 1 - floor ((val - minValue) / range * fromIntegral (height - 1))
-      
-      -- Normalize x positions
-      pointCount = V.length points
+      pointCount  = V.length points
       normalizeX idx = floor (fromIntegral idx / fromIntegral (pointCount - 1) * fromIntegral (chartWidth' - 1))
-      
-      -- Create coordinate pairs
-      coords = V.toList $ V.imap (\idx pt -> (normalizeX idx, normalizeY (pointValue pt))) points
-      
-      -- Build the grid
-      grid = buildGrid height chartWidth' coords
-      
-      -- Add Y-axis labels and values
+      coords      = V.toList $ V.imap (\idx pt -> (normalizeX idx, normalizeY (pointValue pt))) points
+      grid        = buildGrid height chartWidth' coords
       valueLabels = generateValueLabels height minValue maxValue
-      
   in zipWith (\row valLabel -> valLabel <> " | " <> row) grid valueLabels
 
--- | Build ASCII grid.
--- Connects adjacent data points using '-' (horizontal), '|' (vertical),
--- '/' or '+' (diagonal). 'X' marks are stamped last so they always
--- sit on top of connecting lines.
--- All characters are single-byte ASCII so T.splitAt indexing is safe.
 buildGrid :: Int -> Int -> [(Int, Int)] -> [Text]
 buildGrid height width coords =
-  let emptyRow     = T.replicate width " "
-      rows         = replicate height emptyRow
-      -- Step 1: draw connecting lines between consecutive points
+  let emptyRow      = T.replicate width " "
+      rows          = replicate height emptyRow
       rowsWithLines = case coords of
-        []      -> rows
-        [_]     -> rows
-        (c:cs)  -> foldl drawSegment rows (zip (c:cs) cs)
-      -- Step 2: stamp 'X' on top at each actual data point
-      rowsWithX    = foldl (\rs (x,y) -> setCell rs y x 'X') rowsWithLines coords
+        []     -> rows
+        [_]    -> rows
+        (c:cs) -> foldl drawSegment rows (zip (c:cs) cs)
+      rowsWithX = foldl (\rs (x,y) -> setCell rs y x 'X') rowsWithLines coords
   in map (<> " |") rowsWithX
   where
-    -- Draw a segment from (x1,y1) to (x2,y2) using directional ASCII chars
     drawSegment rows' ((x1,y1),(x2,y2)) =
       let pixels = segmentPixels x1 y1 x2 y2
       in foldl (\rs (x,y,ch) ->
@@ -138,34 +104,17 @@ buildGrid height width coords =
            else rs
          ) rows' pixels
 
-    -- Choose the right character for each pixel based on slope direction
     segmentPixels x1 y1 x2 y2 =
-      let dx  = x2 - x1
-          dy  = y2 - y1   -- positive = downward in grid (lower value)
-          -- Pick connector character based on dominant direction
-          ch  | dy == 0           = '-'   -- purely horizontal
-              | dx == 0           = '|'   -- purely vertical
-              | (dx > 0) == (dy > 0) = '+'  -- going down-right or up-left
-              | otherwise         = '/'   -- going up-right or down-left
-          -- Bresenham to get the pixel path
-          pixels = bresenham x1 y1 x2 y2
-          -- Tag each pixel with the appropriate character
-          -- Endpoints will be overwritten by 'X' anyway
-      in map (\(x,y) -> (x, y, dirChar x y x1 y1 x2 y2 dx dy)) pixels
+      let dx = x2 - x1
+          dy = y2 - y1
+      in map (\(x,y) -> (x, y, dirChar dx dy)) (bresenham x1 y1 x2 y2)
 
-    -- Per-pixel character: horizontal step -> '-', vertical step -> '|', diagonal -> '/' or '\'
-    dirChar x y x1 y1 x2 y2 dx dy
-      | dx == 0   = '|'
+    dirChar dx dy
       | dy == 0   = '-'
-      | abs dx >= abs dy =
-          -- shallow slope — use '-' for most pixels, '/' or '+' at transitions
-          let rising = (dx > 0) /= (dy > 0)
-          in if rising then '/' else '+'
-      | otherwise =
-          let rising = (dx > 0) /= (dy > 0)
-          in if rising then '/' else '+'
+      | dx == 0   = '|'
+      | (dx > 0) == (dy > 0) = '+'
+      | otherwise = '/'
 
-    -- Bresenham pixel enumeration (no character assignment)
     bresenham x0 y0 x1' y1' =
       let adx = abs (x1' - x0)
           ady = abs (y1' - y0)
@@ -188,26 +137,21 @@ buildGrid height width coords =
           in before ++ [newRow] ++ after
         _ -> rows'
 
--- | Generate value labels for Y-axis
 generateValueLabels :: Int -> Double -> Double -> [Text]
 generateValueLabels height minValue maxValue =
-  let range = maxValue - minValue
-      step = range / fromIntegral (height - 1)
+  let range  = maxValue - minValue
+      step   = range / fromIntegral (height - 1)
       values = reverse [minValue + step * fromIntegral i | i <- [0..height-1]]
-  in map formatValueLabel values
+  in map (\val -> T.pack $ printf "%10.2f" val) values
 
-formatValueLabel :: Double -> Text
-formatValueLabel val = T.pack $ printf "%10.2f" val
-
--- | Generate chart header
 generateLineHeader :: LineChartData -> [Text]
 generateLineHeader chartData =
   let unitSuffix = case lineUnit chartData of
                      Just unit -> " (" <> unit <> ")"
                      Nothing   -> ""
-      title = case lineTitle chartData of
-                Just t  -> t <> unitSuffix
-                Nothing -> "Line Chart" <> unitSuffix
+      title  = case lineTitle chartData of
+                 Just t  -> t <> unitSuffix
+                 Nothing -> "Line Chart" <> unitSuffix
       yLabel = case lineYLabel chartData of
                  Just lbl -> "Y-axis: " <> lbl
                  Nothing  -> ""
@@ -218,23 +162,18 @@ generateLineHeader chartData =
      , ""
      ]
 
--- | Generate chart footer with X-axis.
--- Renders every label at the same x-column used to plot its data point.
 generateLineFooter :: LineChartData -> Double -> Double -> [Text]
 generateLineFooter chartData minValue maxValue =
   let points     = linePoints chartData
       pointCount = V.length points
-      yAxisWidth = 14   -- matches "  labelWidth + 3" used in renderLineChart
+      yAxisWidth = 14
       chartW     = chartWidth (lineConfig chartData) - yAxisWidth - 10
       xLabel     = case lineXLabel chartData of
                      Just lbl -> lbl
                      Nothing  -> ""
       minValText = T.pack $ printf "%.2f" minValue
       maxValText = T.pack $ printf "%.2f" maxValue
-
-      -- Build an axis row of spaces, then stamp each label at its x position
       axisRow    = buildXAxisRow pointCount chartW (V.toList points)
-
   in [ ""
      , T.replicate yAxisWidth " " <> axisRow
      , if not (T.null xLabel) then T.replicate yAxisWidth " " <> xLabel else ""
@@ -242,7 +181,6 @@ generateLineFooter chartData minValue maxValue =
      , "Value range: " <> minValText <> " to " <> maxValText
      ]
 
--- | Build the X-axis label row by placing each label at its grid x-position.
 buildXAxisRow :: Int -> Int -> [LinePoint] -> Text
 buildXAxisRow pointCount chartW points =
   let row0  = T.replicate (chartW + 2) " "
@@ -257,83 +195,65 @@ placeLabel pointCount chartW row (idx, pt) =
                              * fromIntegral (chartW - 1) :: Double)
       lbl   = pointLabel pt
       lblW  = T.length lbl
-      -- Centre label under the point; clamp so it doesn't overflow
       start = max 0 (min (T.length row - lblW) (xPos - lblW `div` 2))
       (pre, rest) = T.splitAt start row
-      -- Overwrite lblW characters
-      newRow = pre <> lbl <> T.drop lblW rest
-  in newRow
+  in pre <> lbl <> T.drop lblW rest
 
--- | Generate a multi-series line chart
 generateMultiSeriesLineChart :: Vector SeriesData -> ChartConfig -> Maybe Text -> SCEResult [Text]
 generateMultiSeriesLineChart series config titleMaybe = do
-  -- Validate we have at least one series
   if V.null series
     then Left (mkError E2001 "No series data provided" [] Error)
     else do
-      -- Validate all series have same number of points
       let pointCounts = V.map (V.length . seriesPoints) series
       case V.uncons pointCounts of
         Nothing -> Left (mkError E2001 "No series data provided" [] Error)
         Just (firstCount, restCounts) ->
           if not (V.all (== firstCount) restCounts)
           then Left (mkError E2001 "All series must have the same number of points" [] Error)
-          else 
+          else
             let pointCount = firstCount
             in if pointCount < 2
-               then Left (mkError E2002 ("Need at least " <> T.pack (show 2) <> " data points, got " <> T.pack (show pointCount)) ["Collect more data before running this operation."] Error)
+               then Left (mkError E2002
+                     ("Need at least 2 data points, got " <> T.pack (show pointCount))
+                     ["Collect more data before running this operation."] Error)
                else do
-                 -- Calculate global min/max across all series
                  let allValues = V.concatMap (V.map pointValue . seriesPoints) series
-                 let minValue = V.minimum allValues
-                 let maxValue = V.maximum allValues
-                 
+                 -- Safe: pointCount >= 2 and series non-empty, so allValues non-empty.
+                 (minValue, maxValue) <- safeMinMax "multi-series values" allValues
                  let header = generateMultiSeriesHeader series titleMaybe
-                 let chart = renderMultiSeriesChart series minValue maxValue config
-                 let legend = generateLegend series
-                 
+                     chart  = renderMultiSeriesChart series minValue maxValue config
+                     legend = generateLegend series
                  return $ header ++ chart ++ legend
 
 generateMultiSeriesHeader :: Vector SeriesData -> Maybe Text -> [Text]
-generateMultiSeriesHeader series titleMaybe =
+generateMultiSeriesHeader _series titleMaybe =
   let title = case titleMaybe of
                 Just t  -> t
                 Nothing -> "Multi-Series Line Chart"
-  in [ T.replicate 70 "="
-     , title
-     , T.replicate 70 "="
-     , ""
-     ]
+  in [T.replicate 70 "=", title, T.replicate 70 "=", ""]
 
 renderMultiSeriesChart :: Vector SeriesData -> Double -> Double -> ChartConfig -> [Text]
 renderMultiSeriesChart series minValue maxValue config =
-  let height = 12
-      width = chartWidth config
-      labelWidth = 12
+  let height      = 12
+      width       = chartWidth config
+      labelWidth  = 12
       chartWidth' = width - labelWidth - 10
-      
-      range = maxValue - minValue
+      range       = maxValue - minValue
       normalizeY val = height - 1 - floor ((val - minValue) / range * fromIntegral (height - 1))
-      
-      pointCount = case V.uncons series of
-        Just (firstSeries, _) -> V.length (seriesPoints firstSeries)
-        Nothing -> 0  -- Will be caught earlier
+      pointCount  = case V.uncons series of
+                      Just (firstSeries, _) -> V.length (seriesPoints firstSeries)
+                      Nothing               -> 0
       normalizeX idx = floor (fromIntegral idx / fromIntegral (pointCount - 1) * fromIntegral (chartWidth' - 1))
-      
-      -- Build grid for each series
-      emptyRow = T.replicate chartWidth' " "
-      rows = replicate height emptyRow
-      
-      -- Plot all series
-      finalRows = V.foldl' (\rs seriesData ->
-        let coords = V.toList $ V.imap (\idx pt -> 
-              (normalizeX idx, normalizeY (pointValue pt))) (seriesPoints seriesData)
-            symbol = seriesSymbol seriesData
-        in plotSeriesOnGrid rs coords symbol
-        ) rows series
-      
+      emptyRow    = T.replicate chartWidth' " "
+      rows        = replicate height emptyRow
+      finalRows   = V.foldl' (\rs seriesData ->
+                      let coords = V.toList $ V.imap (\idx pt ->
+                                     (normalizeX idx, normalizeY (pointValue pt)))
+                                     (seriesPoints seriesData)
+                          symbol = seriesSymbol seriesData
+                      in plotSeriesOnGrid rs coords symbol
+                    ) rows series
       valueLabels = generateValueLabels height minValue maxValue
-      
   in zipWith (\row valLabel -> valLabel <> " | " <> row <> " |") finalRows valueLabels
   where
     plotSeriesOnGrid rows' coords symbol =
@@ -343,7 +263,6 @@ renderMultiSeriesChart series minValue maxValue config =
         else rs
       ) rows' coords
 
-    -- Safe cell update: symbols must be single-byte ASCII
     setCell rows' y x ch =
       case splitAt y rows' of
         (before, row : after) ->
@@ -355,12 +274,27 @@ renderMultiSeriesChart series minValue maxValue config =
 generateLegend :: Vector SeriesData -> [Text]
 generateLegend series =
   let legendItems = V.toList $ V.map (\s ->
-        T.singleton (seriesSymbol s) <> " = " <> seriesName s
-        ) series
-  in [ ""
-     , "Legend:"
-     ] ++ map ("  " <>) legendItems
+        T.singleton (seriesSymbol s) <> " = " <> seriesName s) series
+  in ["", "Legend:"] ++ map ("  " <>) legendItems
 
--- | Format a single value for display
 formatValue :: Double -> Text
 formatValue val = T.pack $ printf "%.2f" val
+
+-- ---------------------------------------------------------------------------
+-- Internal helpers
+-- ---------------------------------------------------------------------------
+
+-- | Return (min, max) of a non-empty vector, or Left on empty.
+safeMinMax :: Text -> Vector Double -> SCEResult (Double, Double)
+safeMinMax ctx v
+  | V.null v  = Left (mkError E2002
+      ("Cannot compute range for " <> ctx <> ": empty vector")
+      ["Ensure at least one data point is present."] Error)
+  | otherwise =
+      let mn = V.foldl1' min v
+          mx = V.foldl1' max v
+      in Right (mn, mx)
+
+when :: Bool -> SCEResult () -> SCEResult ()
+when True  action = action
+when False _      = Right ()

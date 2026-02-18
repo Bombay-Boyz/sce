@@ -57,9 +57,9 @@ checkBarChartAdmissibility scale dataCount values
     clusterThreshold = 0.15
 
     checkCluster [] = Admissible
-    checkCluster vs =
-      let minV      = minimum vs
-          maxV      = maximum vs
+    checkCluster (v:vs) =
+      let minV      = foldl min v vs
+          maxV      = foldl max v vs
           spreadRatio = if maxV > 0
                           then (maxV - minV) / maxV
                           else 0
@@ -119,11 +119,11 @@ checkHistogramAdmissibility scale dataCount values
       InvalidScaleRejection scale Histogram
   | otherwise = checkVariability values
   where
-    checkVariability [] = NotAdmissible $ 
+    checkVariability [] = NotAdmissible $
       DataQualityRejection "Empty dataset"
-    checkVariability vs =
-      let minV = minimum vs
-          maxV = maximum vs
+    checkVariability (v:vs) =
+      let minV = foldl min v vs
+          maxV = foldl max v vs
           range = maxV - minV
           uniqueVals = length $ group $ sort vs
       in if range < 1e-10
@@ -156,11 +156,11 @@ checkBoxPlotAdmissibility scale dataCount values
       InvalidScaleRejection scale BoxPlot
   | otherwise = checkVariability values
   where
-    checkVariability [] = NotAdmissible $ 
+    checkVariability [] = NotAdmissible $
       DataQualityRejection "Empty dataset"
-    checkVariability vs =
-      let minV = minimum vs
-          maxV = maximum vs
+    checkVariability (v:vs) =
+      let minV = foldl min v vs
+          maxV = foldl max v vs
           range = maxV - minV
           uniqueVals = length $ group $ sort vs
       in if range < 1e-10

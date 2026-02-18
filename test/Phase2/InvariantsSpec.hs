@@ -118,6 +118,9 @@ spec = do
   describe "properties" $ do
     it "checkMonotonicity: ascending list always passes" $
       property $ \(xs :: [Double]) ->
-        let strictly_ascending = zipWith (+) (0 : xs) (map abs xs)
+        -- Build a strictly ascending list by using cumulative sum of (|x|+1),
+        -- guaranteeing each step is at least +1 so no two values are equal.
+        let steps = map ((+ 1) . abs) xs
+            strictly_ascending = scanl (+) 0 steps
             vec = V.fromList strictly_ascending
         in checkMonotonicity "ts" vec == Right ()

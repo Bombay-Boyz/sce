@@ -76,7 +76,8 @@ import qualified Data.Text                    as T
 import           Data.Vector                  (Vector)
 import qualified Data.Vector                  as V
 import qualified Data.Vector.Algorithms.Intro as VA
-import           Data.List                    (sort, group)
+import           Data.List                    (sort, group, maximumBy, minimumBy)
+import           Data.Ord                     (comparing)
 
 -- ---------------------------------------------------------------------------
 -- Kahan compensated summation
@@ -84,7 +85,6 @@ import           Data.List                    (sort, group)
 
 -- | Kahan compensated sum.
 -- Reduces floating-point error from O(n·ε) to O(ε).
--- Reference: Kahan (1965), "Further remarks on reducing truncation errors".
 kahanSum :: Vector Double -> Double
 kahanSum = snd . V.foldl' step (0.0, 0.0)
   where
@@ -104,8 +104,6 @@ kahanMean v = kahanSum v / fromIntegral (V.length v)
 -- ---------------------------------------------------------------------------
 
 -- | One-pass sample variance (Welford 1962, Bessel correction: divides by n-1).
--- Numerically stable for nearly-equal values (avoids catastrophic cancellation).
---
 -- Precondition: @V.length v >= 2@ — callers MUST guard before calling.
 welfordVariance :: Vector Double -> Double
 welfordVariance v =
@@ -154,11 +152,14 @@ computeMode values
   | otherwise     =
       let sorted    = sort (V.toList values)
           grouped   = group sorted
-          -- Data.List.group always produces non-empty sublists; pattern is safe
+          -- group always produces non-empty sublists; head-pattern is safe here
           freqPairs = [(v, length g) | g@(v:_) <- grouped]
-          maxFreq   = maximum (map snd freqPairs)
-          modes     = [v | (v, f) <- freqPairs, f == maxFreq]
-      in Right (minimum modes)   -- minimum of non-empty list: safe
+      in case freqPairs of
+           [] -> Left $ mkError E2002 "Cannot compute mode: no frequency pairs" [] Error
+           _  ->
+             let maxFreq = snd $ maximumBy (comparing snd) freqPairs
+                 modes   = [v | (v, f) <- freqPairs, f == maxFreq]
+             in Right $ minimumBy compare modes
 
 -- ---------------------------------------------------------------------------
 -- Dispersion
@@ -199,7 +200,6 @@ computeVariance scale values
 -- ---------------------------------------------------------------------------
 
 -- | Bias-corrected sample skewness (Fisher-Pearson, matches R e1071 type=2).
--- Returns Right 0 for constant data.
 computeSkewness :: Vector Double -> SCEResult Double
 computeSkewness values
   | V.length values < 3 = Left $ mkError E2002
@@ -214,15 +214,12 @@ computeSkewness values
            then Right 0.0
            else
              let std  = sqrt var
-                 -- Use Kahan for the sum of cubed z-scores
                  m3   = kahanSum $ V.map (\x -> ((x - mean) / std) ^ (3 :: Int)) values
                  g1   = m3 / n
-                 -- Bias-correction factor: sqrt(n*(n-1)) / (n-2)
                  adj  = g1 * sqrt (n * (n - 1)) / (n - 2)
              in Right adj
 
 -- | Bias-corrected excess kurtosis (Joanes & Gill 1998, type G2).
--- Normal distribution gives 0.  Returns Right (-3) for constant data.
 computeKurtosis :: Vector Double -> SCEResult Double
 computeKurtosis values
   | V.length values < 4 = Left $ mkError E2002
@@ -238,14 +235,11 @@ computeKurtosis values
            else
              let std  = sqrt var
                  m4   = kahanSum $ V.map (\x -> ((x - mean) / std) ^ (4 :: Int)) values
-                 -- G2 formula
                  kurt = (n * (n + 1) / ((n - 1) * (n - 2) * (n - 3))) * m4
                       - 3.0 * (n - 1) ^ (2 :: Int) / ((n - 2) * (n - 3))
              in Right kurt
 
 -- | Median Absolute Deviation (unscaled).
--- MAD = median( |x_i - median(x)| )
--- Multiply by 1.4826 to obtain a normal-consistent scale estimate.
 computeMAD :: Vector Double -> SCEResult Double
 computeMAD values
   | V.null values = Left $ mkError E2002
@@ -256,7 +250,7 @@ computeMAD values
           deviations = V.map (\x -> abs (x - med)) values
       in Right (unsafeMedian deviations)
 
--- | Inter-Quartile Range: Q3 − Q1.
+-- | Inter-Quartile Range: Q3 - Q1.
 computeIQR :: Vector Double -> SCEResult Double
 computeIQR values
   | V.null values = Left $ mkError E2002
@@ -276,21 +270,23 @@ computeRange values
   | V.null values = Left $ mkError E2002
       "Cannot compute range: dataset is empty"
       ["Provide at least one data point."] Error
-  | otherwise     = Right $ V.maximum values - V.minimum values
+  | otherwise =
+      -- V.minimum/maximum safe: guarded non-empty above
+      Right $ V.maximum values - V.minimum values
 
 computeMin :: Vector Double -> SCEResult Double
 computeMin values
   | V.null values = Left $ mkError E2002
       "Cannot compute min: dataset is empty"
       ["Provide at least one data point."] Error
-  | otherwise     = Right $ V.minimum values
+  | otherwise = Right $ V.minimum values   -- safe: non-empty guarded above
 
 computeMax :: Vector Double -> SCEResult Double
 computeMax values
   | V.null values = Left $ mkError E2002
       "Cannot compute max: dataset is empty"
       ["Provide at least one data point."] Error
-  | otherwise     = Right $ V.maximum values
+  | otherwise = Right $ V.maximum values   -- safe: non-empty guarded above
 
 -- | Type-7 linear interpolation percentile (matches R and NumPy defaults).
 -- @p@ must be in [0, 100].
@@ -302,7 +298,11 @@ computePercentile p values
   | p < 0 || p > 100 = Left $ mkError E2002
       ("Percentile must be in [0, 100], got " <> T.pack (show p))
       ["Use a value between 0 and 100 inclusive."] Error
-  | V.length values == 1 = Right (V.unsafeHead values)
+  | V.length values == 1 =
+      -- Safe: length is exactly 1, index 0 exists.
+      case values V.!? 0 of
+        Just v  -> Right v
+        Nothing -> Left $ mkError E3001 "Percentile index 0 out of bounds" [] Error
   | otherwise =
       let sorted = V.modify VA.sort values
           n      = V.length sorted
@@ -328,17 +328,15 @@ computePercentile p values
 -- Comprehensive descriptive statistics  (Phase 2.2)
 -- ---------------------------------------------------------------------------
 
--- | Complete descriptive statistics for a numeric column.
--- Fields set to 'Nothing' when sample size is too small for that statistic.
 data DescriptiveStats = DescriptiveStats
   { dsCount    :: Int
   , dsMean     :: Double
   , dsMedian   :: Double
   , dsMode     :: Maybe Double
-  , dsStdDev   :: Maybe Double   -- Nothing when n < 2
-  , dsVariance :: Maybe Double   -- Nothing when n < 2
-  , dsSkewness :: Maybe Double   -- Nothing when n < 3
-  , dsKurtosis :: Maybe Double   -- Nothing when n < 4
+  , dsStdDev   :: Maybe Double
+  , dsVariance :: Maybe Double
+  , dsSkewness :: Maybe Double
+  , dsKurtosis :: Maybe Double
   , dsMAD      :: Double
   , dsIQR      :: Double
   , dsMin      :: Double
@@ -348,7 +346,6 @@ data DescriptiveStats = DescriptiveStats
   , dsQ3       :: Double
   } deriving stock (Show, Eq)
 
--- | Compute 'DescriptiveStats'.  Only fails on empty input.
 computeDescriptiveStats :: Vector Double -> SCEResult DescriptiveStats
 computeDescriptiveStats values
   | V.null values = Left $ mkError E2002
@@ -358,6 +355,7 @@ computeDescriptiveStats values
       let n     = V.length values
           mean' = kahanMean values
           med'  = unsafeMedian values
+          -- Safe: non-empty guarded above
           minV  = V.minimum values
           maxV  = V.maximum values
 
@@ -378,7 +376,7 @@ computeDescriptiveStats values
 
           madV  = case computeMAD values of
                     Right m -> m
-                    Left _  -> 0.0   -- can't fail: we guarded on empty above
+                    Left _  -> 0.0
 
           q1V   = case computePercentile 25.0 values of
                     Right q -> q
@@ -410,8 +408,6 @@ computeDescriptiveStats values
 -- Backward-compat SummaryStats
 -- ---------------------------------------------------------------------------
 
--- | Retained for modules already importing 'SummaryStats'.
--- New code should prefer 'DescriptiveStats'.
 data SummaryStats = SummaryStats
   { statsCount  :: Int
   , statsMean   :: Maybe Double
@@ -463,9 +459,8 @@ computeDelta :: Vector Double -> Vector Double
 computeDelta values
   | V.length values < 2 = V.empty
   | otherwise           =
-      -- V.slice is total; bounds are safe because length >= 2
-      let n    = V.length values
-          rest = V.slice 1 (n - 1) values
+      let n     = V.length values
+          rest  = V.slice 1 (n - 1) values
           init' = V.slice 0 (n - 1) values
       in V.zipWith (-) rest init'
 

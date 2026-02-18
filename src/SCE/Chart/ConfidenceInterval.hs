@@ -7,32 +7,14 @@ Module      : SCE.Chart.ConfidenceInterval
 Description : Confidence interval chart generation with statistical validation
 Copyright   : (c) SCE Team, 2026
 License     : BSD-3-Clause
-
-This module implements confidence interval charts following statistical first principles.
-Confidence interval charts are appropriate for:
-- Time-series data with uncertainty/error estimates
-- Forecasts or predictions with confidence bounds
-- Measurements with known standard errors
-- A/B test results with statistical significance
-- Economic estimates subject to revision
-
-Confidence interval charts display:
-- Point estimates (mean, median, or latest value)
-- Lower confidence bound (e.g., 2.5th percentile for 95% CI)
-- Upper confidence bound (e.g., 97.5th percentile for 95% CI)
-- Time ordering (preserves temporal sequence)
-- Optional: Interquartile range or narrower confidence band
 -}
 module SCE.Chart.ConfidenceInterval
-  ( -- * Chart Generation
-    generateConfidenceInterval
+  ( generateConfidenceInterval
   , ConfidenceIntervalData(..)
   , ConfidencePoint(..)
-    -- * Validation
-    , validateConfidenceIntervalData
-    , isConfidenceIntervalAppropriate
-    -- * Data Detection
-    , detectConfidenceIntervalColumns
+  , validateConfidenceIntervalData
+  , isConfidenceIntervalAppropriate
+  , detectConfidenceIntervalColumns
   ) where
 
 import SCE.Core.Types
@@ -41,182 +23,171 @@ import qualified Data.Text as T
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Text.Printf (printf)
-import Data.Maybe (isJust, fromMaybe, catMaybes)
+import Data.Maybe (isJust, fromMaybe)
 
--- | Single data point with confidence interval
 data ConfidencePoint = ConfidencePoint
-  { cpLabel    :: Text      -- ^ Time period or category label
-  , cpEstimate :: Double    -- ^ Point estimate (mean, median, or value)
-  , cpLower    :: Double    -- ^ Lower confidence bound
-  , cpUpper    :: Double    -- ^ Upper confidence bound
-  , cpInnerLower :: Maybe Double  -- ^ Optional: inner bound (e.g., IQR or 50% CI)
-  , cpInnerUpper :: Maybe Double  -- ^ Optional: inner bound
-  }
-  deriving stock (Show, Eq)
+  { cpLabel      :: Text
+  , cpEstimate   :: Double
+  , cpLower      :: Double
+  , cpUpper      :: Double
+  , cpInnerLower :: Maybe Double
+  , cpInnerUpper :: Maybe Double
+  } deriving stock (Show, Eq)
 
--- | Data required for confidence interval chart
 data ConfidenceIntervalData = ConfidenceIntervalData
-  { ciPoints         :: Vector ConfidencePoint
-  , ciTitle          :: Maybe Text
-  , ciYAxisLabel     :: Text
-  , ciConfig         :: ChartConfig
-  , ciConfidenceLevel :: Double  -- ^ e.g., 0.95 for 95% CI
-  }
-  deriving stock (Show)
+  { ciPoints          :: Vector ConfidencePoint
+  , ciTitle           :: Maybe Text
+  , ciYAxisLabel      :: Text
+  , ciConfig          :: ChartConfig
+  , ciConfidenceLevel :: Double
+  } deriving stock (Show)
 
-------------------------------------------------------------
--- Public API
-------------------------------------------------------------
-
--- | Generate a confidence interval chart
 generateConfidenceInterval :: ConfidenceIntervalData -> SCEResult [Text]
 generateConfidenceInterval ciData = do
-  -- Validate data
   _ <- validateConfidenceIntervalData ciData
-  
+
   let points = ciPoints ciData
-  let n = V.length points
-  
-  -- Must have at least 2 points for meaningful time-series
+  let n      = V.length points
+
   when (n < 2) $
-    Left (mkError E2002 ("Need at least " <> T.pack (show 2) <> " data points, got " <> T.pack (show n)) ["Collect more data before running this operation."] Error)
-  
-  -- Validate each point
+    Left (mkError E2002
+      ("Need at least 2 data points, got " <> T.pack (show n))
+      ["Collect more data before running this operation."] Error)
+
   _ <- V.mapM validatePoint points
-  
-  -- Generate chart
-  let header = generateCIHeader ciData
-  let chart = renderConfidenceInterval ciData
-  let legend = renderCILegend ciData
-  let interpretation = renderCIInterpretation ciData
-  
+
+  -- Safe: n >= 2 guaranteed above, so allVals is non-empty.
+  chart <- renderConfidenceInterval ciData
+
+  let header        = generateCIHeader ciData
+      legend        = renderCILegend ciData
+      interpretation = renderCIInterpretation ciData
+
   return $ header ++ chart ++ [""] ++ legend ++ [""] ++ interpretation
 
--- | Validate that confidence interval chart is appropriate
 validateConfidenceIntervalData :: ConfidenceIntervalData -> SCEResult ()
 validateConfidenceIntervalData ciData = do
-  -- Confidence level must be reasonable
   let cl = ciConfidenceLevel ciData
   when (cl < 0.5 || cl > 0.999) $
-    Left (mkError E2001 ("Confidence level must be in [50%, 99.9%], got " <> T.pack (show (cl * 100)) <> "%") ["Standard values are 90%, 95%, or 99%."] Error)
-  
-  -- Must have at least some points
+    Left (mkError E2001
+      ("Confidence level must be in [50%, 99.9%], got "
+       <> T.pack (show (cl * 100)) <> "%")
+      ["Standard values are 90%, 95%, or 99%."] Error)
+
   let n = V.length (ciPoints ciData)
   when (n < 2) $
-    Left (mkError E2002 ("Need at least " <> T.pack (show 2) <> " data points, got " <> T.pack (show n)) ["Collect more data before running this operation."] Error)
+    Left (mkError E2002
+      ("Need at least 2 data points, got " <> T.pack (show n))
+      ["Collect more data before running this operation."] Error)
 
--- | Validate a single confidence point
 validatePoint :: ConfidencePoint -> SCEResult ConfidencePoint
 validatePoint point = do
-  -- Lower bound must be <= estimate
   when (cpLower point > cpEstimate point) $
-    Left (mkError E2001 ("Lower bound " <> T.pack (show (cpLower point)) <> " > estimate " <> T.pack (show (cpEstimate point)) <> " for " <> cpLabel point) ["Ensure lower bound <= point estimate <= upper bound."] Error)
-  
-  -- Estimate must be <= upper bound
+    Left (mkError E2001
+      ("Lower bound " <> T.pack (show (cpLower point))
+       <> " > estimate " <> T.pack (show (cpEstimate point))
+       <> " for " <> cpLabel point)
+      ["Ensure lower bound <= point estimate <= upper bound."] Error)
+
   when (cpEstimate point > cpUpper point) $
-    Left (mkError E2001 ("Estimate " <> T.pack (show (cpEstimate point)) <> " > upper bound " <> T.pack (show (cpUpper point)) <> " for " <> cpLabel point) ["Ensure lower bound <= point estimate <= upper bound."] Error)
-  
-  -- If inner bounds exist, validate them
+    Left (mkError E2001
+      ("Estimate " <> T.pack (show (cpEstimate point))
+       <> " > upper bound " <> T.pack (show (cpUpper point))
+       <> " for " <> cpLabel point)
+      ["Ensure lower bound <= point estimate <= upper bound."] Error)
+
   case (cpInnerLower point, cpInnerUpper point) of
     (Just il, Just iu) -> do
       when (il < cpLower point || il > cpEstimate point) $
-        Left (mkError E2001 "Inner lower bound must be between outer lower bound and estimate" [] Error)
+        Left (mkError E2001
+          "Inner lower bound must be between outer lower bound and estimate" [] Error)
       when (iu > cpUpper point || iu < cpEstimate point) $
-        Left (mkError E2001 "Inner upper bound must be between estimate and outer upper bound" [] Error)
+        Left (mkError E2001
+          "Inner upper bound must be between estimate and outer upper bound" [] Error)
     _ -> Right ()
-  
+
   return point
 
--- | Check if confidence interval chart is appropriate
 isConfidenceIntervalAppropriate :: Int -> Bool -> SCEResult Bool
 isConfidenceIntervalAppropriate n hasUncertainty
-  | n < 2 = return False  -- Need at least 2 points for time-series
-  | not hasUncertainty = return False  -- Need confidence bounds
-  | otherwise = return True
+  | n < 2            = return False
+  | not hasUncertainty = return False
+  | otherwise        = return True
 
--- | Detect if columns represent confidence interval data
--- Looks for patterns like: Label, Estimate, Lower, Upper
--- Or: Date, Value, CI_Lower, CI_Upper
 detectConfidenceIntervalColumns :: Vector Text -> Maybe (Text, Text, Text, Text)
 detectConfidenceIntervalColumns colNames =
-  let names = V.toList colNames
-      hasLabel = any (matchesPattern ["date", "time", "period", "year", "label"]) names
-      hasEstimate = any (matchesPattern ["estimate", "value", "mean", "median", "point"]) names
-      hasLower = any (matchesPattern ["lower", "min", "ci_lower", "lower_bound"]) names
-      hasUpper = any (matchesPattern ["upper", "max", "ci_upper", "upper_bound"]) names
+  let names        = V.toList colNames
+      hasLabel     = any (matchesPattern ["date","time","period","year","label"]) names
+      hasEstimate  = any (matchesPattern ["estimate","value","mean","median","point"]) names
+      hasLower     = any (matchesPattern ["lower","min","ci_lower","lower_bound"]) names
+      hasUpper     = any (matchesPattern ["upper","max","ci_upper","upper_bound"]) names
   in if hasLabel && hasEstimate && hasLower && hasUpper
-     then Just ( findFirst ["date", "time", "period", "year", "label"] names
-               , findFirst ["estimate", "value", "mean", "median", "point"] names
-               , findFirst ["lower", "min", "ci_lower", "lower_bound"] names
-               , findFirst ["upper", "max", "ci_upper", "upper_bound"] names
-               )
-     else Nothing
+       then Just ( findFirst ["date","time","period","year","label"] names
+                 , findFirst ["estimate","value","mean","median","point"] names
+                 , findFirst ["lower","min","ci_lower","lower_bound"] names
+                 , findFirst ["upper","max","ci_upper","upper_bound"] names
+                 )
+       else Nothing
   where
-    matchesPattern :: [Text] -> Text -> Bool
     matchesPattern patterns name =
       let lower = T.toLower name
-      in any (\p -> p `T.isInfixOf` lower) patterns
-    
-    findFirst :: [Text] -> [Text] -> Text
+      in any (`T.isInfixOf` lower) patterns
+
     findFirst patterns names =
-      case filter (\name -> matchesPattern patterns name) names of
-        (n:_) -> n
-        [] -> ""
+      case filter (matchesPattern patterns) names of
+        (n':_) -> n'
+        []     -> ""
 
-------------------------------------------------------------
--- Rendering Functions
-------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- Rendering
+-- ---------------------------------------------------------------------------
 
-renderConfidenceInterval :: ConfidenceIntervalData -> [Text]
-renderConfidenceInterval ciData =
+-- | Render the CI chart. Returns Left when points vector is empty (should not
+-- happen after validation, but we keep it in SCEResult to be safe).
+renderConfidenceInterval :: ConfidenceIntervalData -> SCEResult [Text]
+renderConfidenceInterval ciData = do
   let points = V.toList $ ciPoints ciData
-      
-      -- Find global min/max for scaling
-      allVals = concatMap (\p -> [cpLower p, cpEstimate p, cpUpper p]) points
-      globalMin = minimum allVals
-      globalMax = maximum allVals
-      range = globalMax - globalMin
-      
-      width = 60  -- Width for the interval bars
-      
-      -- Scale value to position
-      scale :: Double -> Int
-      scale val = if range > 0
-                  then round ((val - globalMin) / range * fromIntegral (width - 1))
-                  else width `div` 2
-      
-      -- Render each time point
+
+  -- Build the list of all plotted values to find global bounds.
+  let allVals = concatMap (\p -> [cpLower p, cpEstimate p, cpUpper p]) points
+
+  -- Safe: points is non-empty (n >= 2 guaranteed by caller).
+  (globalMin, globalMax) <- case allVals of
+    []     -> Left (mkError E2002 "No values to render in CI chart" [] Error)
+    (x:xs) -> Right (foldl min x xs, foldl max x xs)
+
+  let range  = globalMax - globalMin
+      width  = 60
+
+      scalePos :: Double -> Int
+      scalePos val
+        | range > 0 = round ((val - globalMin) / range * fromIntegral (width - 1))
+        | otherwise = width `div` 2
+
       renderPoint p =
-        let label = T.justifyLeft 12 ' ' (cpLabel p)
-            estPos = scale (cpEstimate p)
-            lowerPos = scale (cpLower p)
-            upperPos = scale (cpUpper p)
-            
-            -- Build the visualization line
+        let label    = T.justifyLeft 12 ' ' (cpLabel p)
+            estPos   = scalePos (cpEstimate p)
+            lowerPos = scalePos (cpLower p)
+            upperPos = scalePos (cpUpper p)
             line = V.generate width $ \i ->
               case () of
-                _ | i == estPos -> '●'                    -- Point estimate
-                  | i == lowerPos -> '├'                  -- Lower bound
-                  | i == upperPos -> '┤'                  -- Upper bound
-                  | i > lowerPos && i < upperPos ->       -- Interval range
+                _ | i == estPos   -> '\x25cf'
+                  | i == lowerPos -> '\x251c'
+                  | i == upperPos -> '\x2524'
+                  | i > lowerPos && i < upperPos ->
                       if isJust (cpInnerLower p) && isJust (cpInnerUpper p)
-                      then let ilPos = scale (fromMaybe 0 $ cpInnerLower p)
-                               iuPos = scale (fromMaybe 0 $ cpInnerUpper p)
-                           in if i >= ilPos && i <= iuPos
-                              then '▓'  -- Inner confidence band
-                              else '─'  -- Outer confidence band
-                      else '─'
+                      then let ilPos = scalePos (fromMaybe 0 $ cpInnerLower p)
+                               iuPos = scalePos (fromMaybe 0 $ cpInnerUpper p)
+                           in if i >= ilPos && i <= iuPos then '\x2593' else '\x2500'
+                      else '\x2500'
                   | otherwise -> ' '
-            
             estVal = T.pack $ printf "%6.2f" (cpEstimate p)
-        in label <> " │" <> T.pack (V.toList line) <> "│ " <> estVal
-      
+        in label <> " \x2502" <> T.pack (V.toList line) <> "\x2502 " <> estVal
+
       pointLines = map renderPoint points
-      
-      -- Add scale axis
-      axisLine = formatScaleAxis globalMin globalMax width
-      
-  in pointLines ++ ["", axisLine]
+      axisLine   = formatScaleAxis globalMin globalMax width
+
+  return $ pointLines ++ ["", axisLine]
 
 formatScaleAxis :: Double -> Double -> Int -> Text
 formatScaleAxis minVal maxVal width =
@@ -224,24 +195,21 @@ formatScaleAxis minVal maxVal width =
       maxStr = T.pack $ printf "%.1f" maxVal
       midVal = (minVal + maxVal) / 2
       midStr = T.pack $ printf "%.1f" midVal
-      
-      -- Position labels
       midPos = width `div` 2
-      gap1 = midPos - T.length minStr - 1
-      gap2 = width - midPos - T.length midStr - T.length maxStr - 1
-      
-  in "             " <> minStr <> T.replicate gap1 " " <> 
-     midStr <> T.replicate gap2 " " <> maxStr
+      gap1   = midPos - T.length minStr - 1
+      gap2   = width - midPos - T.length midStr - T.length maxStr - 1
+  in "             " <> minStr
+     <> T.replicate (max 0 gap1) " "
+     <> midStr
+     <> T.replicate (max 0 gap2) " "
+     <> maxStr
 
 generateCIHeader :: ConfidenceIntervalData -> [Text]
 generateCIHeader ciData =
-  let title = fromMaybe "Confidence Interval Chart" (ciTitle ciData)
-      cl = ciConfidenceLevel ciData
+  let title     = fromMaybe "Confidence Interval Chart" (ciTitle ciData)
+      cl        = ciConfidenceLevel ciData
       clPercent = T.pack $ printf "%.0f%%" (cl * 100)
-  in [ T.replicate 70 "="
-     , title
-     , T.replicate 70 "="
-     , ""
+  in [ T.replicate 70 "=", title, T.replicate 70 "=", ""
      , "Confidence Level: " <> clPercent
      , "Y-axis: " <> ciYAxisLabel ciData
      , ""
@@ -249,56 +217,43 @@ generateCIHeader ciData =
 
 renderCILegend :: ConfidenceIntervalData -> [Text]
 renderCILegend ciData =
-  let cl = ciConfidenceLevel ciData
+  let cl        = ciConfidenceLevel ciData
       clPercent = T.pack $ printf "%.0f%%" (cl * 100)
-      hasInner = case V.uncons (ciPoints ciData) of
-                   Just (p, _) -> isJust (cpInnerLower p)
-                   Nothing -> False
+      hasInner  = case V.uncons (ciPoints ciData) of
+                    Just (p, _) -> isJust (cpInnerLower p)
+                    Nothing     -> False
   in [ "Legend:"
-     , "  ●     Point estimate (latest value, mean, or median)"
-     , "  ├─┤   " <> clPercent <> " confidence interval"
-     , "  ─     Uncertainty range"
-     ] ++ if hasInner
-          then ["  ▓     50% confidence band (interquartile range)"]
-          else []
+     , "  \x25cf     Point estimate"
+     , "  \x251c\x2500\x2524   " <> clPercent <> " confidence interval"
+     , "  \x2500     Uncertainty range"
+     ] ++ if hasInner then ["  \x2593     50% confidence band"] else []
 
 renderCIInterpretation :: ConfidenceIntervalData -> [Text]
 renderCIInterpretation ciData =
-  let cl = ciConfidenceLevel ciData
+  let cl        = ciConfidenceLevel ciData
       clPercent = T.pack $ printf "%.0f%%" (cl * 100)
-      points = V.toList $ ciPoints ciData
-      
-      -- Calculate average interval width
-      avgWidth = if null points 
-                 then 0 
-                 else sum (map (\p -> cpUpper p - cpLower p) points) / fromIntegral (length points)
-      
-      -- Check if uncertainty is increasing or decreasing
-      (firstWidth, lastWidth) = case (points, reverse points) of
-        (p1:_, p2:_) -> (cpUpper p1 - cpLower p1, cpUpper p2 - cpLower p2)
-        _ -> (0, 0)
-      
-      trend = if lastWidth > firstWidth * 1.2
-              then "Uncertainty is INCREASING over time (wider intervals)"
-              else if lastWidth < firstWidth * 0.8
-                   then "Uncertainty is DECREASING over time (narrower intervals)"
-                   else "Uncertainty is STABLE over time (consistent intervals)"
-      
+      points    = V.toList $ ciPoints ciData
+      avgWidth  = if null points then 0
+                  else sum (map (\p -> cpUpper p - cpLower p) points)
+                       / fromIntegral (length points)
+      (firstWidth, lastWidth) =
+        case (points, reverse points) of
+          (p1:_, p2:_) -> (cpUpper p1 - cpLower p1, cpUpper p2 - cpLower p2)
+          _            -> (0, 0)
+      trend
+        | lastWidth > firstWidth * 1.2 = "Uncertainty is INCREASING over time"
+        | lastWidth < firstWidth * 0.8 = "Uncertainty is DECREASING over time"
+        | otherwise                    = "Uncertainty is STABLE over time"
   in [ "Interpretation:"
      , "  - Each point shows an estimate with " <> clPercent <> " confidence bounds"
-     , "  - We are " <> clPercent <> " confident the true value lies within the interval"
-     , "  - Average interval width: ±" <> T.pack (printf "%.2f" (avgWidth / 2))
+     , "  - Average interval width: +/-" <> T.pack (printf "%.2f" (avgWidth / 2))
      , "  - " <> trend
-     , ""
-     , "Reading the chart:"
-     , "  - Narrower intervals = more certain estimates"
-     , "  - Wider intervals = more uncertain estimates"
-     , "  - Non-overlapping intervals = statistically significant difference"
-     , "  - Overlapping intervals = difference may not be significant"
      , ""
      ]
 
--- Helper function
+-- Helper
 when :: Bool -> SCEResult () -> SCEResult ()
-when True action = action
-when False _     = Right ()
+when True  action = action
+when False _      = Right ()
+
+
