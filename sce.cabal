@@ -56,10 +56,16 @@ library
       SCE.Ingestion.Schema
       SCE.Ingestion.MissingData
       SCE.Ingestion.Coercion
-      -- Validation
+      -- Validation (Phase 2)
       SCE.Validation.LiquidTypes
       SCE.Validation.Validator
       SCE.Validation.Invariants
+      SCE.Validation.Schema
+      SCE.Validation.Quality
+      -- LiquidHaskell stubs (Phase 6 -- doc only, no LH pragma)
+      SCE.Liquid.Refinements
+      SCE.Liquid.Measures
+      SCE.Liquid.Properties
       -- Charts
       SCE.Chart.Admissibility
       SCE.Chart.Rejection
@@ -122,6 +128,10 @@ test-suite sce-tests
   other-modules:
       Phase0.ErrorSpec
       Phase1.IngestionSpec
+      Phase2.SchemaValidationSpec
+      Phase2.QualitySpec
+      Phase2.InvariantsSpec
+      Phase2.LiquidSpec
   build-depends:
       base       >= 4.14 && < 5
     , sce
@@ -135,3 +145,5 @@ test-suite sce-tests
       -threaded
       -rtsopts
       -with-rtsopts=-N
+
+

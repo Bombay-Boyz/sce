@@ -31,6 +31,12 @@ module SCE.Validation.LiquidTypes
   , validateBarLength
     -- * Aggregate Refinements
   , validatePercentageSum
+    -- * Statistical Core guards (Phase 2 / used in Phase 3)
+  , validateProbability
+  , validateCorrelation
+  , validateDegreesOfFreedom
+  , validateEffectSize
+    -- * Utilities
   , isFinite
   ) where
 
@@ -131,3 +137,75 @@ validatePercentageSum ps = do
 -- Helper for checking if Double is finite
 isFinite :: Double -> Bool
 isFinite x = not (isInfinite x || isNaN x)
+
+-- ---------------------------------------------------------------------------
+-- Phase 2: Statistical Core runtime guards
+-- These are plain Double -> SCEResult Double functions.
+-- LiquidHaskell refinement type annotations are in comments only.
+-- They will be activated as active LH syntax in Phase 6.
+-- ---------------------------------------------------------------------------
+
+-- | Validate that a value is a valid probability: in [0.0, 1.0].
+-- Used by inference modules to guard p-values and power estimates.
+--
+-- {-@ validateProbability :: Double -> SCEResult Probability @-}  <- LH Phase 6
+validateProbability :: Double -> SCEResult Double
+validateProbability p
+  | isNaN p || isInfinite p =
+      Left (mkError E3004
+              ("Probability is non-finite: " <> T.pack (show p))
+              ["Check statistical computation for NaN or overflow."] Error)
+  | p < 0.0 || p > 1.0 =
+      Left (mkError E3004
+              ("Probability out of [0, 1]: " <> T.pack (show p))
+              ["Ensure the value represents a valid probability."] Error)
+  | otherwise = Right p
+
+-- | Validate that a value is a valid correlation coefficient: in [-1.0, 1.0].
+-- Used by correlation modules before returning results.
+--
+-- {-@ validateCorrelation :: Double -> SCEResult Correlation @-}  <- LH Phase 6
+validateCorrelation :: Double -> SCEResult Double
+validateCorrelation r
+  | isNaN r || isInfinite r =
+      Left (mkError E3004
+              ("Correlation is non-finite: " <> T.pack (show r))
+              ["Check for zero-variance inputs or numerical instability."] Error)
+  | r < (-1.0) || r > 1.0 =
+      Left (mkError E3004
+              ("Correlation out of [-1, 1]: " <> T.pack (show r))
+              ["Correlation must lie in [-1, 1]; check the computation."] Error)
+  | otherwise = Right r
+
+-- | Validate that degrees of freedom are strictly positive.
+-- Used by t-test and ANOVA modules before consulting distribution tables.
+--
+-- {-@ validateDegreesOfFreedom :: Double -> SCEResult Positive @-}  <- LH Phase 6
+validateDegreesOfFreedom :: Double -> SCEResult Double
+validateDegreesOfFreedom df
+  | isNaN df || isInfinite df =
+      Left (mkError E3004
+              ("Degrees of freedom is non-finite: " <> T.pack (show df))
+              ["Ensure sample size is sufficient for the chosen test."] Error)
+  | df <= 0.0 =
+      Left (mkError E4002
+              ("Degrees of freedom must be > 0, got: " <> T.pack (show df))
+              ["Provide a larger sample or use a test with fewer parameters."] Error)
+  | otherwise = Right df
+
+-- | Validate that an effect size is non-negative.
+-- Used by effect-size modules (Cohen's d, eta-squared, etc.).
+--
+-- {-@ validateEffectSize :: Double -> SCEResult NonNegative @-}  <- LH Phase 6
+validateEffectSize :: Double -> SCEResult Double
+validateEffectSize e
+  | isNaN e || isInfinite e =
+      Left (mkError E3004
+              ("Effect size is non-finite: " <> T.pack (show e))
+              ["Check the effect size computation for numerical errors."] Error)
+  | e < 0.0 =
+      Left (mkError E3004
+              ("Effect size must be >= 0, got: " <> T.pack (show e))
+              ["Absolute-value the result if a signed effect size was intended."] Error)
+  | otherwise = Right e
+
