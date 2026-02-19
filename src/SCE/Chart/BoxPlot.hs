@@ -159,61 +159,77 @@ isBoxPlotAppropriate scale n values
     tail' (_:xs) = xs
     tail' []     = []
 
+-- | Calculate five-number summary, IQR, outliers, and mean for a vector.
+--
+-- FIX: the original implementation used 'V.foldl1\'' (crashes on empty
+-- vectors) and 'sorted V.! lo' (crashes when n = 0).  This function is
+-- exported, so callers outside this module may pass empty vectors.
+-- The fix adds an explicit empty-vector guard returning neutral stats,
+-- and replaces all partial operations with safe alternatives.
 calculateBoxStats :: Vector Double -> BoxStats
-calculateBoxStats values =
-  let sorted = V.modify VA.sort values
-      n      = V.length sorted
+calculateBoxStats values
+  | V.null values =
+      -- Return neutral/zero stats for empty input rather than crashing.
+      BoxStats { boxMin = 0, boxQ1 = 0, boxMedian = 0, boxQ3 = 0
+               , boxMax = 0, boxIQR = 0, boxOutliers = [], boxMean = 0, boxN = 0 }
+  | otherwise =
+      let sorted = V.modify VA.sort values
+          n      = V.length sorted
 
-      percentile p =
-        let pos      = p * fromIntegral (n - 1)
-            lo       = floor pos
-            hi       = ceiling pos
-            fraction = pos - fromIntegral lo
-        in if lo == hi
-             then sorted V.! lo
-             else (sorted V.! lo) * (1 - fraction) + (sorted V.! hi) * fraction
+          -- Safe percentile using V.!? with a fallback of 0 (unreachable
+          -- because n >= 1 and lo/hi are clamped to [0, n-1]).
+          safeAt i = case sorted V.!? i of { Just x -> x; Nothing -> 0.0 }
 
-      q1     = percentile 0.25
-      median = percentile 0.50
-      q3     = percentile 0.75
-      iqr    = q3 - q1
-      mean   = V.sum values / fromIntegral n
+          percentile p =
+            let pos      = p * fromIntegral (n - 1)
+                lo       = floor pos
+                hi       = ceiling pos
+                fraction = pos - fromIntegral lo
+            in if lo == hi
+                 then safeAt lo
+                 else safeAt lo * (1 - fraction) + safeAt hi * fraction
 
-      (outliers, whiskerMin, whiskerMax) =
-        if iqr < 1e-10
-          then
-            -- Safe: calculateBoxStats is only called after n >= 5 check.
-            let mn = V.foldl1' min sorted
-                mx = V.foldl1' max sorted
-            in ([], mn, mx)
-          else
-            let lowerFence  = q1 - 1.5 * iqr
-                upperFence  = q3 + 1.5 * iqr
-                outliersList = V.toList $ V.filter (\x -> x < lowerFence || x > upperFence) sorted
-                nonOutliers  = V.filter (\x -> x >= lowerFence && x <= upperFence) sorted
-                wMin = case V.uncons nonOutliers of
-                         Just (mn, _) -> mn
-                         Nothing      -> case V.uncons sorted of
-                                           Just (mn, _) -> mn
-                                           Nothing      -> q1
-                wMax = case V.unsnoc nonOutliers of
-                         Just (_, mx) -> mx
-                         Nothing      -> case V.unsnoc sorted of
-                                           Just (_, mx) -> mx
-                                           Nothing      -> q3
-            in (outliersList, wMin, wMax)
+          q1     = percentile 0.25
+          median = percentile 0.50
+          q3     = percentile 0.75
+          iqr    = q3 - q1
+          mean   = V.sum values / fromIntegral n
 
-  in BoxStats
-       { boxMin      = whiskerMin
-       , boxQ1       = q1
-       , boxMedian   = median
-       , boxQ3       = q3
-       , boxMax      = whiskerMax
-       , boxIQR      = iqr
-       , boxOutliers = outliers
-       , boxMean     = mean
-       , boxN        = n
-       }
+          -- Safe min/max using V.uncons / V.unsnoc instead of V.foldl1'.
+          vecMin = case V.uncons sorted of { Just (x, _) -> x; Nothing -> 0.0 }
+          vecMax = case V.unsnoc sorted of { Just (_, x) -> x; Nothing -> 0.0 }
+
+          (outliers, whiskerMin, whiskerMax) =
+            if iqr < 1e-10
+              then ([], vecMin, vecMax)
+              else
+                let lowerFence   = q1 - 1.5 * iqr
+                    upperFence   = q3 + 1.5 * iqr
+                    outliersList = V.toList $ V.filter (\x -> x < lowerFence || x > upperFence) sorted
+                    nonOutliers  = V.filter (\x -> x >= lowerFence && x <= upperFence) sorted
+                    wMin = case V.uncons nonOutliers of
+                             Just (mn, _) -> mn
+                             Nothing      -> case V.uncons sorted of
+                                               Just (mn, _) -> mn
+                                               Nothing      -> q1
+                    wMax = case V.unsnoc nonOutliers of
+                             Just (_, mx) -> mx
+                             Nothing      -> case V.unsnoc sorted of
+                                               Just (_, mx) -> mx
+                                               Nothing      -> q3
+                in (outliersList, wMin, wMax)
+
+      in BoxStats
+           { boxMin      = whiskerMin
+           , boxQ1       = q1
+           , boxMedian   = median
+           , boxQ3       = q3
+           , boxMax      = whiskerMax
+           , boxIQR      = iqr
+           , boxOutliers = outliers
+           , boxMean     = mean
+           , boxN        = n
+           }
 
 identifyOutliers :: Vector Double -> (Double, Double, [Double])
 identifyOutliers values =
@@ -227,10 +243,9 @@ identifyOutliers values =
 renderBoxPlot :: BoxStats -> ChartConfig -> Text -> [Text]
 renderBoxPlot stats config _axisLabel =
   let width  = chartMaxBarLength config
-      -- Five-element list; foldl1 min/max are safe.
-      vals   = [boxMin stats, boxQ1 stats, boxMedian stats, boxQ3 stats, boxMax stats]
-      minVal = foldl1 min vals
-      maxVal = foldl1 max vals
+      -- Explicit min/max on a statically known five-element list — always safe.
+      minVal = minimum [boxMin stats, boxQ1 stats, boxMedian stats, boxQ3 stats, boxMax stats]
+      maxVal = maximum [boxMin stats, boxQ1 stats, boxMedian stats, boxQ3 stats, boxMax stats]
       range  = maxVal - minVal
 
       scalePos :: Double -> Int
@@ -278,8 +293,10 @@ renderCategoricalBoxPlot categories config =
       -- Safe: categories is non-empty (empty guard above).
       -- Collect all values that contribute to the axis bounds.
       boundVals = concatMap (\s -> [boxMin s, boxQ1 s, boxMedian s, boxQ3 s, boxMax s]) allStats
-      globalMin = foldl1 min boundVals
-      globalMax = foldl1 max boundVals
+      -- boundVals is non-empty because allStats is non-empty and each
+      -- contributes exactly 5 elements.  Use minimum/maximum on the list.
+      globalMin = minimum boundVals
+      globalMax = maximum boundVals
       range     = globalMax - globalMin
 
       scalePos :: Double -> Int

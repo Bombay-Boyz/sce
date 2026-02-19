@@ -298,7 +298,7 @@ correlationMatrix pairs
                  <> T.pack (show n0))
                ["Collect more data."] Error
              else do
-               entries <- buildEntries lbls vecs
+               entries <- buildEntries lbls (V.fromList vecs)
                Right CorrelationMatrix
                  { cmLabels  = lbls
                  , cmEntries = entries
@@ -394,15 +394,24 @@ residualise x z
              in V.zipWith (\xi zi -> xi - b * zi) x z
 
 -- | Build all pairwise entries for the correlation matrix.
+--
+-- FIX: replaced partial list indexing (vecs !! i, lbls !! i) with safe
+-- Vector indexing via V.!?.  Both vecs and lbls are converted to Vectors
+-- so that all accesses are O(1) and bounds-safe.  The 0/empty fallbacks
+-- are unreachable because i and j are always in [0 .. n-1] and n =
+-- length lbls = length vecs (checked by correlationMatrix before calling here).
 buildEntries
   :: [T.Text]
-  -> [Vector Double]
+  -> Vector (Vector Double)
   -> SCEResult (Map (T.Text, T.Text) Double)
-buildEntries lbls vecs = do
-  let n = length lbls
+buildEntries lblsList vecsVec = do
+  let lblsVec = V.fromList lblsList
+      n       = V.length lblsVec
+      safeVec i = case vecsVec V.!? i of { Just v -> v; Nothing -> V.empty }
+      safeLbl i = case lblsVec V.!? i of { Just l -> l; Nothing -> "" }
   entries <- sequence
-    [ do r <- corrValue <$> pearsonCorrelation (vecs !! i) (vecs !! j)
-         Right ((lbls !! i, lbls !! j), r)
+    [ do r <- corrValue <$> pearsonCorrelation (safeVec i) (safeVec j)
+         Right ((safeLbl i, safeLbl j), r)
     | i <- [0 .. n - 1]
     , j <- [0 .. n - 1]
     ]

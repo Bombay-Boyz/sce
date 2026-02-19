@@ -597,7 +597,7 @@ generateChartByType chartType config table = do
                           TextValue t    -> BarItem t val
                           IntegerValue i -> BarItem (T.pack $ show i) val
                           NumericValue d -> BarItem (T.pack $ show d) val
-                          MissingValue   -> BarItem "N/A" val
+                          MissingValue   -> BarItem "n/A" val
                       )
                       labels
                       values

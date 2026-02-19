@@ -326,7 +326,7 @@ displayHelp = do
   putStrLn $ T.unpack $ T.replicate 70 "="
   putStrLn ""
   putStrLn "Commands:"
-  putStrLn "  1-N      Select a chart by number"
+  putStrLn "  1-n      Select a chart by number"
   putStrLn "  A        Show all chart options with full details"
   putStrLn "  C        Compare two or more charts side-by-side"
   putStrLn "  H        Show this help message"
@@ -381,7 +381,7 @@ promptForColumn availableColumns purpose = do
 -- | Get yes/no confirmation
 getUserConfirmation :: Text -> IO Bool
 getUserConfirmation prompt = do
-  putStr $ T.unpack prompt ++ " [y/N]: "
+  putStr $ T.unpack prompt ++ " [y/n]: "
   hFlush stdout
   input <- getLine
   return $ map toLower input `elem` ["y", "yes"]

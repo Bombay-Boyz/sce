@@ -18,7 +18,7 @@ Planned refinements (activate in Phase 6):
   {-@ type NonNegative   = {v:Double | v >= 0.0}              @-}
   {-@ type Correlation   = {v:Double | -1.0 <= v && v <= 1.0} @-}
   {-@ type NonEmptyVec a  = {v:V.Vector a | vLen v > 0}       @-}
-  {-@ type MinSizeVec a N = {v:V.Vector a | vLen v >= N}      @-}
+  {-@ type MinSizeVec a n = {v:V.Vector a | vLen v >= n}      @-}
   {-@ type PValue        = {v:Double | 0.0 <= v && v <= 1.0}  @-}
   {-@ type CIBounds      = {v:(Double,Double) | fst v <= snd v} @-}
 -}

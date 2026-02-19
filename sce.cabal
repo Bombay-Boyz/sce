@@ -62,6 +62,15 @@ library
       SCE.Validation.Invariants
       SCE.Validation.Schema
       SCE.Validation.Quality
+      -- Statistical Core (Phase 3)
+      SCE.Statistics.TestResult
+      SCE.Statistics.Descriptive
+      SCE.Statistics.Assumptions
+      SCE.Statistics.Inference
+      SCE.Statistics.NonParametric
+      SCE.Statistics.Categorical
+      SCE.Statistics.Correlation
+      SCE.Statistics.Distribution
       -- LiquidHaskell stubs (Phase 6 -- doc only, no LH pragma)
       SCE.Liquid.Refinements
       SCE.Liquid.Measures
@@ -132,6 +141,7 @@ test-suite sce-tests
       Phase2.QualitySpec
       Phase2.InvariantsSpec
       Phase2.LiquidSpec
+      Phase3.StatisticsSpec
   build-depends:
       base       >= 4.14 && < 5
     , sce

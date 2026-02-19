@@ -50,7 +50,7 @@ generateRejectionReport ct reason =
               <> "key patterns, not overwhelm with exhaustive detail."
         , rejectionRecommendations =
             [ "Group related categories to reduce count"
-            , "Show top N categories + \"Other\" aggregate"
+            , "Show top n categories + \"Other\" aggregate"
             , "Use summary statistics in table form"
             , "Split into multiple exhibits by subcategory"
             ]
