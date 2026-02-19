@@ -71,6 +71,9 @@ library
       SCE.Statistics.Categorical
       SCE.Statistics.Correlation
       SCE.Statistics.Distribution
+      SCE.Table.Contingency
+      SCE.Table.Summary
+      SCE.Chart.Annotations
       -- LiquidHaskell stubs (Phase 6 -- doc only, no LH pragma)
       SCE.Liquid.Refinements
       SCE.Liquid.Measures
